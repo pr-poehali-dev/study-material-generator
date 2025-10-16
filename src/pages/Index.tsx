@@ -8,6 +8,8 @@ import Icon from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
+import { toast } from '@/components/ui/use-toast';
+import funcUrls from '../../backend/func2url.json';
 
 interface Material {
   id: string;
@@ -38,11 +40,14 @@ const Index = () => {
     { id: '2', name: 'История России.docx', type: 'DOCX', uploadDate: '2024-10-12', questionsGenerated: 23 },
   ]);
 
-  const [questions] = useState<Question[]>([
+  const [questions, setQuestions] = useState<Question[]>([
     { id: '1', text: 'Что такое квадратное уравнение?', difficulty: 'easy', materialId: '1' },
     { id: '2', text: 'Решите уравнение: x² + 5x + 6 = 0', difficulty: 'medium', materialId: '1' },
     { id: '3', text: 'В каком году началась Великая Отечественная война?', difficulty: 'easy', materialId: '2' },
   ]);
+  
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedMaterialForGeneration, setSelectedMaterialForGeneration] = useState<string>('');
 
   const [exams] = useState<Exam[]>([
     { id: '1', name: 'Экзамен по алгебре', questionCount: 15, createdDate: '2024-10-13', difficulty: 'medium' },
@@ -83,6 +88,81 @@ const Index = () => {
     }
   };
 
+  const handleGenerateQuestions = async () => {
+    if (!selectedMaterialForGeneration) {
+      toast({
+        title: 'Выберите материал',
+        description: 'Пожалуйста, выберите материал для генерации вопросов',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+
+    try {
+      const difficultyMap: Record<number, string> = {
+        0: 'easy',
+        50: 'medium',
+        100: 'hard'
+      };
+      
+      const closestDifficulty = [0, 50, 100].reduce((prev, curr) => 
+        Math.abs(curr - difficultyLevel[0]) < Math.abs(prev - difficultyLevel[0]) ? curr : prev
+      );
+
+      const materialSample = `Образец учебного материала по теме "${materials.find(m => m.id === selectedMaterialForGeneration)?.name || 'материал'}". 
+      Это может быть текст из учебника, лекции или другого учебного источника.`;
+
+      const response = await fetch(funcUrls['generate-questions'], {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          materialText: materialSample,
+          difficulty: difficultyMap[closestDifficulty],
+          questionCount: questionCount[0]
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Ошибка генерации');
+      }
+
+      const newQuestions: Question[] = data.questions.map((q: any) => ({
+        ...q,
+        materialId: selectedMaterialForGeneration
+      }));
+
+      setQuestions([...questions, ...newQuestions]);
+
+      setMaterials(materials.map(m => 
+        m.id === selectedMaterialForGeneration 
+          ? { ...m, questionsGenerated: m.questionsGenerated + newQuestions.length }
+          : m
+      ));
+
+      toast({
+        title: 'Вопросы сгенерированы!',
+        description: `Успешно создано ${newQuestions.length} вопросов с помощью AI`,
+      });
+
+      setActiveTab('generator');
+
+    } catch (error: any) {
+      toast({
+        title: 'Ошибка генерации',
+        description: error.message || 'Не удалось сгенерировать вопросы. Проверьте настройки API.',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border/50 bg-card/30 backdrop-blur-sm sticky top-0 z-50">
@@ -94,7 +174,7 @@ const Index = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-heading font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-                  AI Exam Generator
+                  Marich.gen
                 </h1>
                 <p className="text-xs text-muted-foreground">Intelligent Question Generation</p>
               </div>
@@ -275,7 +355,13 @@ const Index = () => {
               <CardContent>
                 <div className="space-y-4">
                   {materials.map((material) => (
-                    <Card key={material.id} className="hover:shadow-md transition-shadow duration-300">
+                    <Card 
+                      key={material.id} 
+                      className={`hover:shadow-md transition-all duration-300 cursor-pointer ${
+                        selectedMaterialForGeneration === material.id ? 'ring-2 ring-primary' : ''
+                      }`}
+                      onClick={() => setSelectedMaterialForGeneration(material.id)}
+                    >
                       <CardContent className="p-6">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
@@ -294,13 +380,16 @@ const Index = () => {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="sm">
+                            {selectedMaterialForGeneration === material.id && (
+                              <Badge className="gradient-ai text-white border-0">Выбран</Badge>
+                            )}
+                            <Button variant="ghost" size="sm" onClick={(e) => e.stopPropagation()}>
                               <Icon name="Eye" size={16} />
                             </Button>
-                            <Button variant="ghost" size="sm">
+                            <Button variant="ghost" size="sm" onClick={(e) => e.stopPropagation()}>
                               <Icon name="Download" size={16} />
                             </Button>
-                            <Button variant="ghost" size="sm">
+                            <Button variant="ghost" size="sm" onClick={(e) => e.stopPropagation()}>
                               <Icon name="Trash2" size={16} />
                             </Button>
                           </div>
@@ -309,6 +398,41 @@ const Index = () => {
                     </Card>
                   ))}
                 </div>
+                
+                {selectedMaterialForGeneration && (
+                  <div className="mt-6 p-6 rounded-lg bg-primary/5 border border-primary/30">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full gradient-ai flex items-center justify-center animate-glow">
+                          <Icon name="Sparkles" size={20} className="text-white" />
+                        </div>
+                        <div>
+                          <h4 className="font-heading font-semibold">Готовы генерировать?</h4>
+                          <p className="text-sm text-muted-foreground">
+                            Выбран материал: {materials.find(m => m.id === selectedMaterialForGeneration)?.name}
+                          </p>
+                        </div>
+                      </div>
+                      <Button 
+                        className="gradient-ai text-white border-0" 
+                        onClick={handleGenerateQuestions}
+                        disabled={isGenerating}
+                      >
+                        {isGenerating ? (
+                          <>
+                            <Icon name="Loader2" size={16} className="animate-spin" />
+                            Генерация...
+                          </>
+                        ) : (
+                          <>
+                            <Icon name="Sparkles" size={16} />
+                            Сгенерировать вопросы
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -353,23 +477,23 @@ const Index = () => {
                   ))}
                 </div>
 
-                <div className="mt-6 p-6 rounded-lg bg-muted/30 border border-border/50">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full gradient-ai flex items-center justify-center animate-glow">
-                        <Icon name="Sparkles" size={20} className="text-white" />
-                      </div>
-                      <div>
-                        <h4 className="font-heading font-semibold">Готовы сгенерировать больше вопросов?</h4>
-                        <p className="text-sm text-muted-foreground">AI проанализирует материалы и создаст новые вопросы</p>
-                      </div>
+                {questions.length === 0 && (
+                  <div className="text-center py-12">
+                    <div className="w-20 h-20 rounded-full gradient-ai flex items-center justify-center mx-auto mb-4 animate-glow">
+                      <Icon name="Sparkles" size={32} className="text-white" />
                     </div>
-                    <Button className="gradient-ai text-white border-0">
-                      <Icon name="Sparkles" size={16} />
-                      Сгенерировать
+                    <h3 className="font-heading font-semibold text-lg mb-2">Вопросы еще не созданы</h3>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Перейдите в Библиотеку, выберите материал и нажмите "Сгенерировать вопросы"
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setActiveTab('library')}
+                    >
+                      Перейти к библиотеке
                     </Button>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

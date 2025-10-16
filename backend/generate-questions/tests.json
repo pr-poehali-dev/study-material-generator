@@ -1,0 +1,35 @@
+{
+  "tests": [
+    {
+      "name": "Test question generation from material",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "materialText": "Квадратное уравнение — это уравнение вида ax² + bx + c = 0, где a ≠ 0. Для решения квадратного уравнения используется дискриминант D = b² - 4ac.",
+        "difficulty": "medium",
+        "questionCount": 3
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "questions": "array",
+        "count": "number",
+        "model": "string"
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Test missing material text",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "difficulty": "easy",
+        "questionCount": 5
+      },
+      "expectedStatus": 400,
+      "expectedBody": {
+        "error": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
