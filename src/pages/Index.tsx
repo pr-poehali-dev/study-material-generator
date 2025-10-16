@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -35,16 +35,10 @@ interface Exam {
 }
 
 const Index = () => {
-  const [materials, setMaterials] = useState<Material[]>([
-    { id: '1', name: 'Основы алгебры.pdf', type: 'PDF', uploadDate: '2024-10-10', questionsGenerated: 15 },
-    { id: '2', name: 'История России.docx', type: 'DOCX', uploadDate: '2024-10-12', questionsGenerated: 23 },
-  ]);
-
-  const [questions, setQuestions] = useState<Question[]>([
-    { id: '1', text: 'Что такое квадратное уравнение?', difficulty: 'easy', materialId: '1' },
-    { id: '2', text: 'Решите уравнение: x² + 5x + 6 = 0', difficulty: 'medium', materialId: '1' },
-    { id: '3', text: 'В каком году началась Великая Отечественная война?', difficulty: 'easy', materialId: '2' },
-  ]);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [isLoadingMaterials, setIsLoadingMaterials] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedMaterialForGeneration, setSelectedMaterialForGeneration] = useState<string>('');
@@ -58,18 +52,95 @@ const Index = () => {
   const [difficultyLevel, setDifficultyLevel] = useState([50]);
   const [activeTab, setActiveTab] = useState('upload');
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files) {
-      const newMaterials = Array.from(files).map((file, index) => ({
-        id: `${materials.length + index + 1}`,
-        name: file.name,
-        type: file.name.split('.').pop()?.toUpperCase() || 'FILE',
-        uploadDate: new Date().toISOString().split('T')[0],
-        questionsGenerated: 0,
-      }));
-      setMaterials([...materials, ...newMaterials]);
+  useEffect(() => {
+    loadMaterials();
+  }, []);
+
+  const loadMaterials = async () => {
+    try {
+      const response = await fetch(funcUrls['upload-material']);
+      const data = await response.json();
+      
+      if (response.ok) {
+        const formattedMaterials = data.materials.map((m: any) => ({
+          id: m.id.toString(),
+          name: m.name,
+          type: m.file_type,
+          uploadDate: new Date(m.upload_date).toISOString().split('T')[0],
+          questionsGenerated: m.questions_generated
+        }));
+        setMaterials(formattedMaterials);
+      }
+    } catch (error) {
+      console.error('Failed to load materials:', error);
+    } finally {
+      setIsLoadingMaterials(false);
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+
+    for (const file of Array.from(files)) {
+      try {
+        const fileType = file.name.split('.').pop()?.toLowerCase() || '';
+        
+        if (!['pdf', 'docx', 'doc', 'txt'].includes(fileType)) {
+          toast({
+            title: 'Неподдерживаемый формат',
+            description: `Файл ${file.name} не поддерживается. Используйте PDF, DOCX или TXT`,
+            variant: 'destructive'
+          });
+          continue;
+        }
+
+        const reader = new FileReader();
+        const fileContent = await new Promise<string>((resolve) => {
+          reader.onload = (e) => {
+            const base64 = e.target?.result as string;
+            resolve(base64.split(',')[1]);
+          };
+          reader.readAsDataURL(file);
+        });
+
+        const response = await fetch(funcUrls['upload-material'], {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileContent: fileContent,
+            fileType: fileType
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Ошибка загрузки');
+        }
+
+        toast({
+          title: 'Файл загружен!',
+          description: `${file.name} успешно обработан. Извлечено ${data.text_length} символов текста.`,
+        });
+
+      } catch (error: any) {
+        toast({
+          title: 'Ошибка загрузки',
+          description: `${file.name}: ${error.message}`,
+          variant: 'destructive'
+        });
+      }
+    }
+
+    await loadMaterials();
+    setIsUploading(false);
+    e.target.value = '';
   };
 
   const getDifficultyColor = (difficulty: 'easy' | 'medium' | 'hard') => {
@@ -111,16 +182,13 @@ const Index = () => {
         Math.abs(curr - difficultyLevel[0]) < Math.abs(prev - difficultyLevel[0]) ? curr : prev
       );
 
-      const materialSample = `Образец учебного материала по теме "${materials.find(m => m.id === selectedMaterialForGeneration)?.name || 'материал'}". 
-      Это может быть текст из учебника, лекции или другого учебного источника.`;
-
       const response = await fetch(funcUrls['generate-questions'], {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          materialText: materialSample,
+          materialId: parseInt(selectedMaterialForGeneration),
           difficulty: difficultyMap[closestDifficulty],
           questionCount: questionCount[0]
         })
@@ -133,17 +201,14 @@ const Index = () => {
       }
 
       const newQuestions: Question[] = data.questions.map((q: any) => ({
-        ...q,
+        id: q.id.toString(),
+        text: q.text,
+        difficulty: q.difficulty,
         materialId: selectedMaterialForGeneration
       }));
 
       setQuestions([...questions, ...newQuestions]);
-
-      setMaterials(materials.map(m => 
-        m.id === selectedMaterialForGeneration 
-          ? { ...m, questionsGenerated: m.questionsGenerated + newQuestions.length }
-          : m
-      ));
+      await loadMaterials();
 
       toast({
         title: 'Вопросы сгенерированы!',
@@ -296,16 +361,21 @@ const Index = () => {
                     <Input
                       type="file"
                       multiple
-                      accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                      accept=".pdf,.doc,.docx,.txt"
                       onChange={handleFileUpload}
                       className="max-w-xs"
+                      disabled={isUploading}
                     />
+                    {isUploading && (
+                      <Badge className="gradient-ai text-white border-0 animate-pulse">
+                        <Icon name="Loader2" size={14} className="animate-spin mr-1" />
+                        Загрузка и анализ...
+                      </Badge>
+                    )}
                     <div className="flex flex-wrap gap-2 justify-center">
                       <Badge variant="outline">PDF</Badge>
-                      <Badge variant="outline">Word</Badge>
-                      <Badge variant="outline">Excel</Badge>
-                      <Badge variant="outline">PowerPoint</Badge>
-                      <Badge variant="outline">TXT</Badge>
+                      <Badge variant="outline">Word (.docx)</Badge>
+                      <Badge variant="outline">Текст (.txt)</Badge>
                     </div>
                   </div>
                 </div>
@@ -353,8 +423,30 @@ const Index = () => {
                 <CardDescription>Все загруженные учебные материалы</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {materials.map((material) => (
+                {isLoadingMaterials ? (
+                  <div className="text-center py-12">
+                    <Icon name="Loader2" size={32} className="animate-spin mx-auto mb-4 text-primary" />
+                    <p className="text-sm text-muted-foreground">Загрузка материалов...</p>
+                  </div>
+                ) : materials.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                      <Icon name="FolderOpen" size={32} className="text-muted-foreground" />
+                    </div>
+                    <h3 className="font-heading font-semibold text-lg mb-2">Нет материалов</h3>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Загрузите первый файл во вкладке "Загрузка"
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setActiveTab('upload')}
+                    >
+                      Перейти к загрузке
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {materials.map((material) => (
                     <Card 
                       key={material.id} 
                       className={`hover:shadow-md transition-all duration-300 cursor-pointer ${
@@ -396,10 +488,11 @@ const Index = () => {
                         </div>
                       </CardContent>
                     </Card>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
                 
-                {selectedMaterialForGeneration && (
+                {!isLoadingMaterials && materials.length > 0 && selectedMaterialForGeneration && (
                   <div className="mt-6 p-6 rounded-lg bg-primary/5 border border-primary/30">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">

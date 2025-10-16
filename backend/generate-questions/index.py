@@ -1,7 +1,8 @@
 import json
 import os
 from typing import Dict, Any, List
-from pydantic import BaseModel, Field
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     '''
@@ -37,20 +38,53 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         }
     
     body_data = json.loads(event.get('body', '{}'))
-    material_text: str = body_data.get('materialText', '')
+    material_id: int = body_data.get('materialId')
     difficulty: str = body_data.get('difficulty', 'medium')
     question_count: int = body_data.get('questionCount', 5)
     
-    if not material_text:
+    if not material_id:
         return {
             'statusCode': 400,
             'headers': {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
-            'body': json.dumps({'error': 'materialText is required'}),
+            'body': json.dumps({'error': 'materialId is required'}),
             'isBase64Encoded': False
         }
+    
+    database_url = os.environ.get('DATABASE_URL')
+    if not database_url:
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': 'Database not configured'}),
+            'isBase64Encoded': False
+        }
+    
+    conn = psycopg2.connect(database_url)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("SELECT content FROM materials WHERE id = %s", (material_id,))
+    material = cursor.fetchone()
+    
+    if not material:
+        cursor.close()
+        conn.close()
+        return {
+            'statusCode': 404,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': 'Material not found'}),
+            'isBase64Encoded': False
+        }
+    
+    material_text = material['content']
     
     openai_api_key = os.environ.get('OPENAI_API_KEY')
     if not openai_api_key:
@@ -103,11 +137,25 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         questions = []
         for i, line in enumerate(questions_lines[:question_count]):
             question_text = line.split('.', 1)[-1].strip() if '.' in line else line.strip()
-            questions.append({
-                'id': f'gen_{i+1}',
-                'text': question_text,
-                'difficulty': difficulty
-            })
+            
+            cursor.execute("""
+                INSERT INTO questions (material_id, text, difficulty)
+                VALUES (%s, %s, %s)
+                RETURNING id, text, difficulty, created_at
+            """, (material_id, question_text, difficulty))
+            
+            question = cursor.fetchone()
+            questions.append(dict(question))
+        
+        cursor.execute("""
+            UPDATE materials 
+            SET questions_generated = questions_generated + %s
+            WHERE id = %s
+        """, (len(questions), material_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
         
         return {
             'statusCode': 200,
@@ -119,11 +167,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 'questions': questions,
                 'count': len(questions),
                 'model': 'gpt-4o-mini'
-            }),
+            }, default=str),
             'isBase64Encoded': False
         }
         
     except Exception as e:
+        if 'conn' in locals():
+            conn.rollback()
+            cursor.close()
+            conn.close()
         return {
             'statusCode': 500,
             'headers': {

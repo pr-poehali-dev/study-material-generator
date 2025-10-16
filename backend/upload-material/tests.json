@@ -1,0 +1,27 @@
+{
+  "tests": [
+    {
+      "name": "Test get all materials",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "materials": "array"
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Test missing file data",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "fileName": "test.pdf"
+      },
+      "expectedStatus": 400,
+      "expectedBody": {
+        "error": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
